@@ -5,7 +5,7 @@ import requests
 
 app = Flask(__name__)  # Initialize Flask app before defining routes
 
-# Get API Keys from environment variables (SECURE)
+# Get API Keys from environment variables
 deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
 
@@ -35,12 +35,15 @@ def call_deepseek_ai(prompt: str) -> str:
 
 def transcribe_audio(recording_url):
     """Send Twilio recording to Deepgram for transcription."""
-    url = "https://api.deepgram.com/v1/listen"
+    # Append ".mp3" to the Twilio URL to force correct format
+    formatted_url = f"{recording_url}.mp3"
+
+    url = "https://api.deepgram.com/v1/listen?punctuate=true&language=en-US"
     headers = {
         "Authorization": f"Token {deepgram_api_key}",
         "Content-Type": "application/json"
     }
-    payload = {"url": recording_url}
+    payload = {"url": formatted_url}
 
     response = requests.post(url, json=payload, headers=headers)
     if response.status_code == 200:
@@ -107,13 +110,22 @@ def menu():
 def analyze_speech():
     """Analyze recorded speech with Deepgram and return AI feedback."""
     recording_url = request.form.get("RecordingUrl")
+
     if not recording_url:
+        print("ERROR: No recording URL received from Twilio")
         return "Error: No recording URL received."
 
+    print(f"Received Recording URL: {recording_url}")  # Logs the Twilio recording URL
+
     transcript = transcribe_audio(recording_url)
+    print(f"Deepgram Transcription: {transcript}")  # Logs the transcript
+
+    # Send transcript to DeepSeek AI for feedback
+    ai_feedback = call_deepseek_ai(f"Analyze this speech: {transcript}")
+    print(f"DeepSeek AI Response: {ai_feedback}")  # Logs DeepSeek response
 
     response = VoiceResponse()
-    response.say(f"Your transcribed speech is: {transcript}")
+    response.say(ai_feedback)
     return str(response)
 
 if __name__ == "__main__":
