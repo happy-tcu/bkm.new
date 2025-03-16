@@ -61,13 +61,41 @@ def menu():
         ai_response = call_deepseek_ai(prompt)
         response.say("Here is your DeepSeek AI-based word of the day:")
         response.say(ai_response)
+
     elif choice == "2":
         response.say("Tell me about your favorite adventure after the beep.")
         response.record(max_length=10, action="/analyze_speech")
+
+    elif choice == "3":
+        prompt = "Ask the user a simple multiple-choice English grammar question."
+        ai_response = call_deepseek_ai(prompt)
+        response.say("Here is your AI-generated quiz question:")
+        response.say(ai_response)
+
+    elif choice == "4":
+        prompt = "Create a very short motivational story in English."
+        ai_response = call_deepseek_ai(prompt)
+        response.say("Here is your AI-generated story:")
+        response.say(ai_response)
+
     else:
         response.say("Invalid choice. Please try again.")
         response.redirect("/ivr")
 
+    return str(response)
+
+@app.route("/analyze_speech", methods=["POST"])
+def analyze_speech():
+    """Analyze recorded speech and return AI feedback."""
+    recording_url = request.form.get("RecordingUrl")
+    if not recording_url:
+        return "Error: No recording URL received."
+
+    # Send the recording URL to DeepSeek AI for analysis (future step)
+    response_text = f"Your recording has been received and will be analyzed: {recording_url}"
+    
+    response = VoiceResponse()
+    response.say(response_text)
     return str(response)
 
 if __name__ == "__main__":
