@@ -5,16 +5,20 @@ import requests
 
 app = Flask(__name__)  # Initialize Flask app before defining routes
 
-# Get the DeepSeek API key from environment variables (SECURE)
+# Get API Keys from environment variables (SECURE)
 deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
+
 if not deepseek_api_key:
     raise ValueError("DeepSeek API Key is missing! Set it as an environment variable.")
+if not deepgram_api_key:
+    raise ValueError("Deepgram API Key is missing! Set it as an environment variable.")
 
 def call_deepseek_ai(prompt: str) -> str:
     """Call the DeepSeek AI API and return the response."""
-    url = "https://api.deepseek.com/v1/chat/completions"  # Use the correct DeepSeek AI API URL
+    url = "https://api.deepseek.com/v1/chat/completions"
     payload = {
-        "model": "deepseek-chat",  # Ensure you are using the correct DeepSeek model
+        "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7
     }
@@ -29,10 +33,25 @@ def call_deepseek_ai(prompt: str) -> str:
     else:
         return f"DeepSeek AI Error: {response.text}"
 
+def transcribe_audio(recording_url):
+    """Send Twilio recording to Deepgram for transcription."""
+    url = "https://api.deepgram.com/v1/listen"
+    headers = {
+        "Authorization": f"Token {deepgram_api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {"url": recording_url}
+
+    response = requests.post(url, json=payload, headers=headers)
+    if response.status_code == 200:
+        return response.json().get("results", [{}])[0].get("alternatives", [{}])[0].get("transcript", "No transcription available.")
+    else:
+        return f"Deepgram Error: {response.text}"
+
 @app.route("/")
 def home():
     """Home endpoint to check the service status."""
-    return "Bakame AI is running with DeepSeek integration!"
+    return "Bakame AI is running with DeepSeek and Deepgram integration!"
 
 @app.route("/ivr", methods=["POST"])
 def ivr():
@@ -86,16 +105,15 @@ def menu():
 
 @app.route("/analyze_speech", methods=["POST"])
 def analyze_speech():
-    """Analyze recorded speech and return AI feedback."""
+    """Analyze recorded speech with Deepgram and return AI feedback."""
     recording_url = request.form.get("RecordingUrl")
     if not recording_url:
         return "Error: No recording URL received."
 
-    # Send the recording URL to DeepSeek AI for analysis (future step)
-    response_text = f"Your recording has been received and will be analyzed: {recording_url}"
-    
+    transcript = transcribe_audio(recording_url)
+
     response = VoiceResponse()
-    response.say(response_text)
+    response.say(f"Your transcribed speech is: {transcript}")
     return str(response)
 
 if __name__ == "__main__":
