@@ -63,7 +63,7 @@ def ivr():
     gather = Gather(num_digits=1, action="/menu", method="POST")
     gather.say(
         "Hello! Welcome to Bakame AI. "
-        "Press 1 for a word of the day from DeepSeek AI. "
+        "Press 1 for a word of the day from Bakame AI. "
         "Press 2 to record your speech for analysis. "
         "Press 3 for a short AI quiz. "
         "Press 4 for an AI-created story."
