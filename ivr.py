@@ -116,7 +116,7 @@ def speech_coaching():
     response = VoiceResponse()
     
     gather = Gather(input="speech", action="/analyze-speech", timeout=3)
-    gather.say("Tell me something, and I will help improve your pronunciation.", voice="Polly.Matthew", rate="85%")
+    gather.say("Tell me something, and I will help improve your pronunciation.", voice="Polly.Matthew", rate="95%")
     response.append(gather)
 
     return str(response)
@@ -129,12 +129,12 @@ def analyze_speech():
     speech_text = request.form.get("SpeechResult")
 
     if not speech_text:
-        response.say("I didn't hear anything. Try again.", voice="Polly.Matthew", rate="85%")
+        response.say("I didn't hear anything. Try again.", voice="Polly.Matthew", rate="95%")
         response.redirect("/menu")
         return str(response)
 
     feedback = call_deepseek_ai(f"Provide real-time pronunciation feedback for: {speech_text}")
-    response.say(feedback, voice="Polly.Matthew", rate="85%")
+    response.say(feedback, voice="Polly.Matthew", rate="95%")
 
     response.redirect("/speech-coaching")  # Loop back for instant response
 
@@ -145,8 +145,8 @@ def open_conversation():
     """AI has a free-flowing conversation with the student."""
     response = VoiceResponse()
     
-    gather = Gather(input="speech", action="/conversation-response", timeout=3)
-    gather.say("Let's have a conversation! What would you like to talk about?", voice="Polly.Matthew", rate="85%")
+    gather = Gather(input="speech", action="/conversation-response", timeout=10)
+    gather.say("Let's have a conversation! What would you like to talk about?", voice="Polly.Matthew", rate="95%")
     response.append(gather)
 
     return str(response)
@@ -163,7 +163,7 @@ def conversation_response():
         return str(response)
 
     ai_reply = call_deepseek_ai(f"Continue this conversation naturally: {speech_text}")
-    response.say(ai_reply, voice="Polly.Matthew", rate="85%")
+    response.say(ai_reply, voice="Polly.Matthew", rate="95%")
 
     response.redirect("/open-conversation")  # Keeps the conversation flowing
 
