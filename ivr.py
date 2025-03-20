@@ -48,9 +48,8 @@ def handle_choice():
         return str(response)
     
     elif digits == "2":
-        response.say("Tell me about your favorite adventure after the beep.")
-        response.play("https://www.soundjay.com/button/beep-07.wav")  # Plays beep before recording
-        response.record(timeout=10, playBeep=True, maxLength=30, action="/analyze_speech")
+        response.say("Tell me about your favorite adventure.")
+response.record(timeout=10, playBeep=False, maxLength=30, action="/analyze_speech")
         return str(response)
     
     elif digits == "3":
