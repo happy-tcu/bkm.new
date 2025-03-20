@@ -38,7 +38,7 @@ def menu():
     """Main interactive IVR menu."""
     response = VoiceResponse()
     gather = Gather(num_digits=1, action="/handle-key", method="POST")
-    gather.say("Press 1 for an interactive fact session. Press 2 for speech coaching. Press 3 for an English quiz. Press 4 to have a conversation in English.", voice="Polly.Brian", rate="85%")
+    gather.say("Press 1 for an interactive fact session. Press 2 for speech coaching. Press 3 for an English quiz. Press 4 to have a conversation in English.", voice="Polly.Matthew", rate="80%")
     response.append(gather)
     return str(response)
 
@@ -52,7 +52,7 @@ def handle_key():
         response.redirect("/fact-session")
 
     elif choice == "2":
-        response.say("Please speak. I will give you feedback as you talk.", voice="Polly.Brian", rate="85%")
+        response.say("Please speak. I will give you feedback as you talk.", voice="Polly.Matthew", rate="80%")
         response.record(timeout=30, playBeep=False, action="/analyze-speech")
 
     elif choice == "3":
@@ -62,7 +62,7 @@ def handle_key():
         response.redirect("/open-conversation")
 
     else:
-        response.say("Invalid choice. Please try again.", voice="Polly.Brian", rate="85%")
+        response.say("Invalid choice. Please try again.", voice="Polly.Matthew", rate="80%")
         response.redirect("/ivr")
 
     return str(response)
@@ -74,10 +74,10 @@ def fact_session():
     fact_prompt = "Tell me an interesting fact about English language history."
     fact = call_deepseek_ai(fact_prompt)
     
-    response.say(fact, voice="Polly.Brian", rate="85%")
+    response.say(fact, voice="Polly.Matthew", rate="80%")
 
     gather = Gather(input="speech", action="/fact-response", timeout=5)
-    gather.say("What do you think about this fact?", voice="Polly.Brian", rate="85%")
+    gather.say("What do you think about this fact?", voice="Polly.Matthew", rate="80%")
     response.append(gather)
 
     return str(response)
@@ -89,12 +89,12 @@ def fact_response():
     speech_text = request.form.get("SpeechResult")
 
     if not speech_text:
-        response.say("I didn't hear anything. Let's try another fact.", voice="Polly.Brian", rate="85%")
+        response.say("I didn't hear anything. Let's try another fact.", voice="Polly.Matthew", rate="80%")
         response.redirect("/fact-session")
         return str(response)
 
     feedback = call_deepseek_ai(f"Provide an encouraging response to: {speech_text}")
-    response.say(feedback, voice="Polly.Brian", rate="85%")
+    response.say(feedback, voice="Polly.Matthew", rate="80%")
 
     response.redirect("/fact-session")
     return str(response)
@@ -111,10 +111,10 @@ def analyze_speech():
     transcript = transcribe_audio(recording_url)
     feedback = call_deepseek_ai(f"Provide live feedback on pronunciation and fluency for: {transcript}")
     
-    response.say(feedback, voice="Polly.Brian", rate="85%")
+    response.say(feedback, voice="Polly.Matthew", rate="80%")
 
     gather = Gather(input="speech", action="/analyze-speech", timeout=5)
-    response.say("Say something else and I will keep helping you.", voice="Polly.Brian", rate="85%")
+    response.say("Say something else and I will keep helping you.", voice="Polly.Matthew", rate="80%")
     response.append(gather)
 
     return str(response)
@@ -127,7 +127,7 @@ def english_quiz():
     question = call_deepseek_ai(quiz_prompt)
     
     gather = Gather(input="speech", action="/quiz-answer", timeout=5)
-    gather.say(question, voice="Polly.Brian", rate="85%")
+    gather.say(question, voice="Polly.Matthew", rate="80%")
     response.append(gather)
 
     return str(response)
@@ -139,12 +139,12 @@ def quiz_answer():
     answer = request.form.get("SpeechResult")
 
     if not answer:
-        response.say("I didn't hear an answer. Let's try another question.", voice="Polly.Brian", rate="85%")
+        response.say("I didn't hear an answer. Let's try another question.", voice="Polly.Matthew", rate="80%")
         response.redirect("/english-quiz")
         return str(response)
 
     feedback = call_deepseek_ai(f"Evaluate if this answer is correct: {answer}")
-    response.say(feedback, voice="Polly.Brian", rate="85%")
+    response.say(feedback, voice="Polly.Matthew", rate="80%")
     response.redirect("/english-quiz")
 
     return str(response)
@@ -154,7 +154,7 @@ def open_conversation():
     """AI has a free-flowing conversation with the student."""
     response = VoiceResponse()
     gather = Gather(input="speech", action="/conversation-response", timeout=5)
-    gather.say("Let's have a conversation! What would you like to talk about?", voice="Polly.Brian", rate="85%")
+    gather.say("Let's have a conversation! What would you like to talk about?", voice="Polly.Matthew", rate="80%")
     response.append(gather)
     return str(response)
 
@@ -165,12 +165,12 @@ def conversation_response():
     speech_text = request.form.get("SpeechResult")
 
     if not speech_text:
-        response.say("I didn't hear you. Try again.", voice="Polly.Brian", rate="85%")
+        response.say("I didn't hear you. Try again.", voice="Polly.Matthew", rate="80%")
         response.redirect("/open-conversation")
         return str(response)
 
     ai_reply = call_deepseek_ai(f"Continue this conversation: {speech_text}")
-    response.say(ai_reply, voice="Polly.Brian", rate="85%")
+    response.say(ai_reply, voice="Polly.Matthew", rate="80%")
 
     response.redirect("/open-conversation")
     return str(response)
