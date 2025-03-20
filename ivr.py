@@ -5,10 +5,10 @@ import requests
 
 app = Flask(__name__)
 
-# Temporary storage (to be replaced with a database later)
+# Temporary storage (To be replaced with a database in the future)
 student_data = {}
 
-# Get API Keys
+# Get API Keys from environment variables
 deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
 
@@ -23,18 +23,11 @@ def call_deepseek_ai(prompt):
     payload = {
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.5
+        "temperature": 0.2  # Lower temperature for faster, more accurate responses
     }
     headers = {"Authorization": f"Bearer {deepseek_api_key}", "Content-Type": "application/json"}
     response = requests.post(url, json=payload, headers=headers)
     return response.json()["choices"][0]["message"]["content"]
-
-def transcribe_audio(recording_url):
-    """Transcribe speech using Deepgram."""
-    url = "https://api.deepgram.com/v1/listen"
-    headers = {"Authorization": f"Token {deepgram_api_key}"}
-    response = requests.post(url, headers=headers, json={"url": recording_url})
-    return response.json()["results"]["channels"][0]["alternatives"][0]["transcript"]
 
 @app.route("/ivr", methods=["POST"])
 def welcome_student():
@@ -56,7 +49,6 @@ def store_name():
         response.redirect("/ivr")
         return str(response)
 
-    # Store name temporarily
     student_data["name"] = student_name
 
     gather = Gather(input="speech", action="/store-id", timeout=5)
@@ -76,7 +68,6 @@ def store_id():
         response.redirect("/store-name")
         return str(response)
 
-    # Store student ID
     student_data["id"] = student_id
     student_name = student_data.get("name", "Student")
 
@@ -91,7 +82,7 @@ def menu():
     student_name = student_data.get("name", "Student")
     response = VoiceResponse()
     gather = Gather(num_digits=1, action="/handle-key", method="POST")
-    gather.say(f"{student_name}, press 1 for an interactive fact session. Press 2 for speech coaching. Press 3 for an English quiz. Press 4 to have a conversation in English.", voice="Polly.Matthew", rate="80%")
+    gather.say(f"{student_name}, press 1 for interactive facts, press 2 for speech coaching, press 3 for an English quiz, press 4 for an open conversation.", voice="Polly.Matthew", rate="80%")
     response.append(gather)
     return str(response)
 
@@ -105,8 +96,7 @@ def handle_key():
         response.redirect("/fact-session")
 
     elif choice == "2":
-        response.say("Please speak. I will give you feedback as you talk.", voice="Polly.Matthew", rate="80%")
-        response.record(timeout=30, playBeep=False, action="/analyze-speech")
+        response.redirect("/speech-coaching")
 
     elif choice == "3":
         response.redirect("/english-quiz")
@@ -120,22 +110,34 @@ def handle_key():
 
     return str(response)
 
+@app.route("/speech-coaching", methods=["POST"])
+def speech_coaching():
+    """AI provides real-time feedback as the student speaks."""
+    response = VoiceResponse()
+    
+    gather = Gather(input="speech", action="/analyze-speech", timeout=5)
+    gather.say("Tell me something, and I will give you feedback.", voice="Polly.Matthew", rate="80%")
+    response.append(gather)
+
+    return str(response)
+
 @app.route("/analyze-speech", methods=["POST"])
 def analyze_speech():
     """AI gives real-time feedback on speech."""
     response = VoiceResponse()
-    recording_url = request.form.get("RecordingUrl")
     
-    if not recording_url:
-        return "Error: No recording URL received."
+    speech_text = request.form.get("SpeechResult")
 
-    transcript = transcribe_audio(recording_url)
-    feedback = call_deepseek_ai(f"Provide live feedback on pronunciation and fluency for: {transcript}")
-    
+    if not speech_text:
+        response.say("I didn't hear anything. Try again.", voice="Polly.Matthew", rate="80%")
+        response.redirect("/menu")
+        return str(response)
+
+    feedback = call_deepseek_ai(f"Provide real-time pronunciation feedback for: {speech_text}")
     response.say(feedback, voice="Polly.Matthew", rate="80%")
 
     gather = Gather(input="speech", action="/analyze-speech", timeout=5)
-    response.say("Say something else and I will keep helping you.", voice="Polly.Matthew", rate="80%")
+    response.say("Say something else, and I will keep helping you.", voice="Polly.Matthew", rate="80%")
     response.append(gather)
 
     return str(response)
@@ -148,7 +150,7 @@ def english_quiz():
     question = call_deepseek_ai(quiz_prompt)
     
     gather = Gather(input="speech", action="/quiz-answer", timeout=5)
-    gather.say(question, voice="Polly.Matthew", rate="90%")
+    gather.say(question, voice="Polly.Matthew", rate="80%")
     response.append(gather)
 
     return str(response)
