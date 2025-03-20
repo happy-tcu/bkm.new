@@ -1,1 +1,13 @@
 .env
+.twilio-cli/
+.vscode/
+Applications/
+Desktop/
+Documents/
+Downloads/
+Library/
+Movies/
+Music/
+Pictures/
+Public/
+flask.log
