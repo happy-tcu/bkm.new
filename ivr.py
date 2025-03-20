@@ -5,6 +5,9 @@ import requests
 
 app = Flask(__name__)
 
+# Temporary storage (to be replaced with a database later)
+student_data = {}
+
 # Get API Keys
 deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
 deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
@@ -34,11 +37,61 @@ def transcribe_audio(recording_url):
     return response.json()["results"]["channels"][0]["alternatives"][0]["transcript"]
 
 @app.route("/ivr", methods=["POST"])
+def welcome_student():
+    """Welcomes the student and collects their name."""
+    response = VoiceResponse()
+    gather = Gather(input="speech", action="/store-name", timeout=5)
+    gather.say("Welcome to your interactive English learning session. Please say your full name.", voice="Polly.Matthew", rate="80%")
+    response.append(gather)
+    return str(response)
+
+@app.route("/store-name", methods=["POST"])
+def store_name():
+    """Stores the student's name and asks for their student ID."""
+    response = VoiceResponse()
+    student_name = request.form.get("SpeechResult")
+
+    if not student_name:
+        response.say("I didn't catch that. Please say your full name again.", voice="Polly.Matthew", rate="80%")
+        response.redirect("/ivr")
+        return str(response)
+
+    # Store name temporarily
+    student_data["name"] = student_name
+
+    gather = Gather(input="speech", action="/store-id", timeout=5)
+    gather.say(f"Thank you, {student_name}. Now, please say your student ID number.", voice="Polly.Matthew", rate="80%")
+    response.append(gather)
+
+    return str(response)
+
+@app.route("/store-id", methods=["POST"])
+def store_id():
+    """Stores the student's ID and moves to the main menu."""
+    response = VoiceResponse()
+    student_id = request.form.get("SpeechResult")
+
+    if not student_id:
+        response.say("I didn't hear your student ID. Please try again.", voice="Polly.Matthew", rate="80%")
+        response.redirect("/store-name")
+        return str(response)
+
+    # Store student ID
+    student_data["id"] = student_id
+    student_name = student_data.get("name", "Student")
+
+    response.say(f"Thank you, {student_name}. Now let's begin your learning session.", voice="Polly.Matthew", rate="80%")
+    response.redirect("/menu")
+
+    return str(response)
+
+@app.route("/menu", methods=["POST"])
 def menu():
     """Main interactive IVR menu."""
+    student_name = student_data.get("name", "Student")
     response = VoiceResponse()
     gather = Gather(num_digits=1, action="/handle-key", method="POST")
-    gather.say("Press 1 for an interactive fact session. Press 2 for speech coaching. Press 3 for an English quiz. Press 4 to have a conversation in English.", voice="Polly.Matthew", rate="80%")
+    gather.say(f"{student_name}, press 1 for an interactive fact session. Press 2 for speech coaching. Press 3 for an English quiz. Press 4 to have a conversation in English.", voice="Polly.Matthew", rate="80%")
     response.append(gather)
     return str(response)
 
@@ -63,40 +116,8 @@ def handle_key():
 
     else:
         response.say("Invalid choice. Please try again.", voice="Polly.Matthew", rate="80%")
-        response.redirect("/ivr")
+        response.redirect("/menu")
 
-    return str(response)
-
-@app.route("/fact-session", methods=["POST"])
-def fact_session():
-    """AI shares a fact, then asks follow-up questions."""
-    response = VoiceResponse()
-    fact_prompt = "Tell me an interesting fact about English language history."
-    fact = call_deepseek_ai(fact_prompt)
-    
-    response.say(fact, voice="Polly.Matthew", rate="80%")
-
-    gather = Gather(input="speech", action="/fact-response", timeout=5)
-    gather.say("What do you think about this fact?", voice="Polly.Matthew", rate="80%")
-    response.append(gather)
-
-    return str(response)
-
-@app.route("/fact-response", methods=["POST"])
-def fact_response():
-    """AI listens to the student's response and continues interaction."""
-    response = VoiceResponse()
-    speech_text = request.form.get("SpeechResult")
-
-    if not speech_text:
-        response.say("I didn't hear anything. Let's try another fact.", voice="Polly.Matthew", rate="80%")
-        response.redirect("/fact-session")
-        return str(response)
-
-    feedback = call_deepseek_ai(f"Provide an encouraging response to: {speech_text}")
-    response.say(feedback, voice="Polly.Matthew", rate="80%")
-
-    response.redirect("/fact-session")
     return str(response)
 
 @app.route("/analyze-speech", methods=["POST"])
@@ -127,7 +148,7 @@ def english_quiz():
     question = call_deepseek_ai(quiz_prompt)
     
     gather = Gather(input="speech", action="/quiz-answer", timeout=5)
-    gather.say(question, voice="Polly.Matthew", rate="80%")
+    gather.say(question, voice="Polly.Matthew", rate="90%")
     response.append(gather)
 
     return str(response)
@@ -147,32 +168,6 @@ def quiz_answer():
     response.say(feedback, voice="Polly.Matthew", rate="80%")
     response.redirect("/english-quiz")
 
-    return str(response)
-
-@app.route("/open-conversation", methods=["POST"])
-def open_conversation():
-    """AI has a free-flowing conversation with the student."""
-    response = VoiceResponse()
-    gather = Gather(input="speech", action="/conversation-response", timeout=5)
-    gather.say("Let's have a conversation! What would you like to talk about?", voice="Polly.Matthew", rate="80%")
-    response.append(gather)
-    return str(response)
-
-@app.route("/conversation-response", methods=["POST"])
-def conversation_response():
-    """AI continues the open-ended conversation."""
-    response = VoiceResponse()
-    speech_text = request.form.get("SpeechResult")
-
-    if not speech_text:
-        response.say("I didn't hear you. Try again.", voice="Polly.Matthew", rate="80%")
-        response.redirect("/open-conversation")
-        return str(response)
-
-    ai_reply = call_deepseek_ai(f"Continue this conversation: {speech_text}")
-    response.say(ai_reply, voice="Polly.Matthew", rate="80%")
-
-    response.redirect("/open-conversation")
     return str(response)
 
 if __name__ == "__main__":
