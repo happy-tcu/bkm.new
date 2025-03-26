@@ -174,7 +174,7 @@ def open_conversation():
     response = VoiceResponse()
     
     gather = Gather(input="speech", action="/conversation-response", timeout=5)
-    gather.say("Let's practice speaking! What topic would you like to discuss today?", voice="Polly.Matthew", rate="85%")
+    gather.say("Hi Happy! Welcome back! Let's practice speaking! What topic would you like to discuss today? Any fun stories from one of your class?", voice="Polly.Matthew", rate="85%")
     response.append(gather)
 
     return str(response)
