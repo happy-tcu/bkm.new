@@ -1,202 +1,298 @@
-from flask import Flask, request
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from flask import Flask, request, jsonify
+from twilio.twiml.voice_response import VoiceResponse, Gather, Stream
 import os
-import requests
+import redis
+import json
+import asyncio
+import aiohttp
+import websockets
+from deepgram import Deepgram
+import logging
+from datetime import datetime
+import langdetect
+from googletrans import Translator
 
 app = Flask(__name__)
 
-# Temporary storage (Replace with a database later)
-student_data = {}
+# Redis for session storage and analytics
+redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
-# Get API Keys from environment variables
-deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
-deepgram_api_key = os.getenv("DEEPGRAM_API_KEY")
+# API Keys
+GROK_API_KEY = os.getenv("GROK_API_KEY")
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
-if not deepseek_api_key:
-    raise ValueError("DeepSeek API Key is missing! Set it as an environment variable.")
-if not deepgram_api_key:
-    raise ValueError("Deepgram API Key is missing! Set it as an environment variable.")
+if not GROK_API_KEY or not DEEPGRAM_API_KEY:
+    raise ValueError("Missing API keys! Set GROK_API_KEY and DEEPGRAM_API_KEY.")
 
-def call_deepseek_ai(prompt):
-    """Call DeepSeek AI and return a response."""
-    url = "https://api.deepseek.com/v1/chat/completions"
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.1  # Faster, more accurate responses
-    }
-    headers = {"Authorization": f"Bearer {deepseek_api_key}", "Content-Type": "application/json"}
-    response = requests.post(url, json=payload, headers=headers)
-    return response.json()["choices"][0]["message"]["content"]
+# Deepgram and Translator
+dg_client = Deepgram(DEEPGRAM_API_KEY)
+translator = Translator()
+
+# Logging
+logging.basicConfig(level=logging.INFO, filename="ivr_advanced.log")
+logger = logging.getLogger(__name__)
+
+# Sentiment thresholds
+SENTIMENT_POSITIVE = 0.3
+SENTIMENT_NEGATIVE = -0.3
+
+async def call_grok_api(prompt, session_id=None, language="en"):
+    """Call Grok API with context and language support."""
+    url = "https://api.x.ai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"}
+    context = redis_client.get(f"session:{session_id}:context") or []
+    if isinstance(context, str):
+        context = json.loads(context)
+
+    messages = context + [{"role": "user", "content": prompt}]
+    payload = {"model": "grok-3", "messages": messages, "max_tokens": 200}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                reply = data["choices"][0]["message"]["content"]
+                if language != "en":
+                    reply = translator.translate(reply, dest=language).text
+                context.extend([{"role": "user", "content": prompt}, {"role": "assistant", "content": reply}])
+                redis_client.setex(f"session:{session_id}:context", 7200, json.dumps(context))
+                return reply
+            logger.error(f"Grok API error: {resp.status}")
+            return "I’m having trouble processing that. Let’s try again."
+
+async def analyze_sentiment(text):
+    """Analyze sentiment using Grok."""
+    sentiment_prompt = f"Analyze the sentiment of this text (positive, negative, neutral) and give a score (-1 to 1): {text}"
+    sentiment = await call_grok_api(sentiment_prompt)
+    score = float(sentiment.split("score:")[-1].strip()) if "score:" in sentiment else 0
+    return score
+
+def get_session_id(request):
+    return request.form.get("CallSid", "default_session")
+
+async def log_interaction(session_id, action, data):
+    """Log interaction for analytics."""
+    timestamp = datetime.now().isoformat()
+    redis_client.lpush(f"analytics:{session_id}", json.dumps({"timestamp": timestamp, "action": action, "data": data}))
 
 @app.route("/ivr", methods=["POST"])
-def welcome_student():
-    """Welcomes the student and collects their name."""
+async def welcome_student():
+    """Welcome with real-time Deepgram streaming."""
+    session_id = get_session_id(request)
     response = VoiceResponse()
-    gather = Gather(input="speech", action="/store-name", timeout=5)
-    gather.say("Welcome! Please say your full name.", voice="Polly.Matthew", rate="85%")
-    response.append(gather)
+    response.say("Welcome! Say your full name.", voice="Polly.Matthew", rate="85%")
+    stream = Stream(url=f"wss://{request.host}:8080/stream/{session_id}", name="deepgram_stream")
+    response.append(stream)
+    response.redirect(f"/store-name?session_id={session_id}")
+    await log_interaction(session_id, "welcome", {"state": "start"})
     return str(response)
 
 @app.route("/store-name", methods=["POST"])
-def store_name():
-    """Stores the student's name and asks for their student ID."""
+async def store_name():
+    """Store name with language detection."""
+    session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
-    student_name = request.form.get("SpeechResult")
-
-    if not student_name:
-        response.say("I didn't catch that. Please say your name again.", voice="Polly.Matthew", rate="85%")
-        response.redirect("/ivr")
+    speech_result = request.form.get("SpeechResult")
+    if not speech_result:
+        response.say("I didn’t catch that. Try again.", voice="Polly.Matthew", rate="85%")
+        response.redirect(f"/ivr?session_id={session_id}")
         return str(response)
 
-    student_data["name"] = student_name
-
-    gather = Gather(input="speech", action="/store-id", timeout=5)
-    gather.say(f"Thank you, {student_name}. Now, please say your student ID number.", voice="Polly.Matthew", rate="85%")
+    language = langdetect.detect(speech_result)
+    redis_client.setex(f"session:{session_id}:name", 7200, speech_result)
+    redis_client.setex(f"session:{session_id}:language", 7200, language)
+    gather = Gather(input="speech", action=f"/store-id?session_id={session_id}", timeout=5)
+    gather.say(f"Thanks, {speech_result}. Say your student ID.", voice="Polly.Matthew", rate="85%")
     response.append(gather)
-
+    await log_interaction(session_id, "name_stored", {"name": speech_result, "language": language})
     return str(response)
 
 @app.route("/store-id", methods=["POST"])
-def store_id():
-    """Stores the student's ID and moves to the main menu."""
+async def store_id():
+    """Store ID and route dynamically."""
+    session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
     student_id = request.form.get("SpeechResult")
+    student_name = redis_client.get(f"session:{session_id}:name") or "Student"
+    language = redis_client.get(f"session:{session_id}:language") or "en"
 
     if not student_id:
-        response.say("I didn't hear your student ID. Please try again.", voice="Polly.Matthew", rate="85%")
-        response.redirect("/store-name")
+        response.say("I didn’t hear your ID. Try again.", voice="Polly.Matthew", rate="85%")
+        response.redirect(f"/store-name?session_id={session_id}")
         return str(response)
 
-    student_data["id"] = student_id
-    student_name = student_data.get("name", "Student")
-
-    response.say(f"Thank you, {student_name}. Now let's begin.", voice="Polly.Matthew", rate="85%")
-    response.redirect("/menu")
-
+    redis_client.setex(f"session:{session_id}:id", 7200, student_id)
+    intent = await call_grok_api(f"Guess the intent of this ID input: {student_id}", session_id, language)
+    if "help" in intent.lower():
+        response.redirect(f"/open-conversation?session_id={session_id}")
+    else:
+        response.say(f"Thanks, {student_name}. Let’s begin.", voice="Polly.Matthew", rate="85%")
+        response.redirect(f"/menu?session_id={session_id}")
+    await log_interaction(session_id, "id_stored", {"id": student_id})
     return str(response)
 
 @app.route("/menu", methods=["POST"])
-def menu():
-    """Main interactive IVR menu."""
-    student_name = student_data.get("name", "Student")
+async def menu():
+    """Dynamic menu with sentiment adjustment."""
+    session_id = request.args.get("session_id", get_session_id(request))
+    student_name = redis_client.get(f"session:{session_id}:name") or "Student"
+    language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
-    gather = Gather(num_digits=1, action="/handle-key", method="POST")
-    gather.say(f"{student_name}, press 1 for interactive facts, press 2 for speech coaching, press 3 for an English quiz, press 4 for an open conversation.", voice="Polly.Matthew", rate="85%")
+    sentiment = redis_client.get(f"session:{session_id}:sentiment") or 0
+    sentiment = float(sentiment)
+
+    menu_prompt = f"{student_name}, press 1 for facts, 2 for speech coaching, 3 for quiz, 4 for conversation."
+    if sentiment < SENTIMENT_NEGATIVE:
+        menu_prompt = f"{student_name}, you sound upset. Press 1 for facts, 2 for coaching, 3 for quiz, 4 to talk it out."
+    elif sentiment > SENTIMENT_POSITIVE:
+        menu_prompt = f"{student_name}, you sound excited! Press 1 for facts, 2 for coaching, 3 for quiz, 4 to chat."
+
+    gather = Gather(num_digits=1, action=f"/handle-key?session_id={session_id}", method="POST")
+    gather.say(menu_prompt, voice="Polly.Matthew", rate="85%")
     response.append(gather)
     return str(response)
 
 @app.route("/handle-key", methods=["POST"])
-def handle_key():
-    """Handle menu selection."""
+async def handle_key():
+    """Handle menu with dynamic routing."""
+    session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
     choice = request.form.get("Digits")
-
-    if choice == "1":
-        response.redirect("/fact-session")
-
-    elif choice == "2":
-        response.redirect("/speech-coaching")
-
-    elif choice == "3":
-        response.redirect("/english-quiz")
-
-    elif choice == "4":
-        response.redirect("/open-conversation")
-
+    routes = {"1": "/fact-session", "2": "/speech-coaching", "3": "/english-quiz", "4": "/open-conversation"}
+    if choice in routes:
+        response.redirect(f"{routes[choice]}?session_id={session_id}")
     else:
-        response.say("Invalid choice. Please try again.", voice="Polly.Matthew", rate="85%")
-        response.redirect("/menu")
-
+        response.say("Invalid choice. Try again.", voice="Polly.Matthew", rate="85%")
+        response.redirect(f"/menu?session_id={session_id}")
+    await log_interaction(session_id, "menu_choice", {"choice": choice})
     return str(response)
 
 @app.route("/fact-session", methods=["POST"])
-def fact_session():
-    """AI shares a fact and engages in discussion."""
+async def fact_session():
+    """Share facts with sentiment-aware tone."""
+    session_id = request.args.get("session_id", get_session_id(request))
+    language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
-    fact_prompt = "Tell me an interesting fact about the English language."
-    fact = call_deepseek_ai(fact_prompt)
-    
+    fact = await call_grok_api("Tell me an interesting fact about the English language.", session_id, language)
     response.say(fact, voice="Polly.Matthew", rate="85%")
-
-    gather = Gather(input="speech", action="/fact-response", timeout=5)
-    gather.say("What do you think about this fact?", voice="Polly.Matthew", rate="85%")
+    gather = Gather(input="speech", action=f"/fact-response?session_id={session_id}", timeout=5)
+    gather.say("What do you think?", voice="Polly.Matthew", rate="85%")
     response.append(gather)
-
     return str(response)
 
 @app.route("/fact-response", methods=["POST"])
-def fact_response():
-    """AI continues fact-based discussion."""
+async def fact_response():
+    """Respond with sentiment analysis."""
+    session_id = request.args.get("session_id", get_session_id(request))
+    language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
     speech_text = request.form.get("SpeechResult")
-
     if not speech_text:
-        response.redirect("/fact-session")
+        response.redirect(f"/fact-session?session_id={session_id}")
         return str(response)
 
-    feedback = call_deepseek_ai(f"Give a thoughtful response to: {speech_text}")
+    sentiment = await analyze_sentiment(speech_text)
+    redis_client.setex(f"session:{session_id}:sentiment", 7200, str(sentiment))
+    feedback = await call_grok_api(f"Respond thoughtfully to: {speech_text}", session_id, language)
     response.say(feedback, voice="Polly.Matthew", rate="85%")
-
-    response.redirect("/fact-session")
+    response.redirect(f"/fact-session?session_id={session_id}")
+    await log_interaction(session_id, "fact_response", {"text": speech_text, "sentiment": sentiment})
     return str(response)
 
 @app.route("/speech-coaching", methods=["POST"])
-def speech_coaching():
-    """AI provides real-time feedback as the student speaks."""
+async def speech_coaching():
+    """Advanced pronunciation training."""
+    session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
-    
-    gather = Gather(input="speech", action="/analyze-speech", timeout=5)
-    gather.say("Tell me something, and I will help improve your pronunciation.", voice="Polly.Matthew", rate="85%")
+    gather = Gather(input="speech", action=f"/analyze-speech?session_id={session_id}", timeout=5)
+    gather.say("Say a sentence, and I’ll analyze your pronunciation with phonetics.", voice="Polly.Matthew", rate="85%")
     response.append(gather)
-
     return str(response)
 
 @app.route("/analyze-speech", methods=["POST"])
-def analyze_speech():
-    """AI gives real-time feedback on speech."""
+async def analyze_speech():
+    """Phonetic feedback and scoring."""
+    session_id = request.args.get("session_id", get_session_id(request))
+    language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
     speech_text = request.form.get("SpeechResult")
-
     if not speech_text:
-        response.redirect("/speech-coaching")
+        response.redirect(f"/speech-coaching?session_id={session_id}")
         return str(response)
 
-    feedback = call_deepseek_ai(f"Correct and improve this spoken response: {speech_text}")
+    feedback = await call_grok_api(
+        f"Analyze this speech: '{speech_text}'. Provide a score (1-10) and phonetic breakdown (IPA).",
+        session_id, language
+    )
     response.say(feedback, voice="Polly.Matthew", rate="85%")
-
-    response.redirect("/speech-coaching")
+    response.redirect(f"/speech-coaching?session_id={session_id}")
+    await log_interaction(session_id, "speech_analysis", {"text": speech_text, "feedback": feedback})
     return str(response)
 
 @app.route("/open-conversation", methods=["POST"])
-def open_conversation():
-    """AI Learning Buddy for English conversation practice."""
+async def open_conversation():
+    """Sentiment-aware conversation."""
+    session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
-    
-    gather = Gather(input="speech", action="/conversation-response", timeout=5)
-    gather.say("Hi Happy! Welcome back! Let's practice speaking! What topic would you like to discuss today? Any fun stories from one of your class?", voice="Polly.Matthew", rate="85%")
+    gather = Gather(input="speech", action=f"/conversation-response?session_id={session_id}", timeout=5)
+    gather.say("Hi! Let’s chat. What’s on your mind today?", voice="Polly.Matthew", rate="85%")
     response.append(gather)
-
     return str(response)
 
 @app.route("/conversation-response", methods=["POST"])
-def conversation_response():
-    """AI continues the conversation dynamically."""
+async def conversation_response():
+    """Dynamic conversation with sentiment and intent."""
+    session_id = request.args.get("session_id", get_session_id(request))
+    language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
     speech_text = request.form.get("SpeechResult")
-
     if not speech_text:
-        response.redirect("/open-conversation")
+        response.redirect(f"/open-conversation?session_id={session_id}")
         return str(response)
 
-    ai_reply = call_deepseek_ai(f"Continue this conversation as a friendly tutor: {speech_text}")
-    response.say(ai_reply, voice="Polly.Matthew", rate="85%")
-
-    gather = Gather(input="speech", action="/conversation-response", timeout=5)
-    gather.say("Your turn! Keep talking.", voice="Polly.Matthew", rate="85%")
+    sentiment = await analyze_sentiment(speech_text)
+    redis_client.setex(f"session:{session_id}:sentiment", 7200, str(sentiment))
+    intent = await call_grok_api(f"Guess the intent of: {speech_text}", session_id, language)
+    reply = await call_grok_api(
+        f"Continue this conversation as a tutor, considering intent '{intent}' and sentiment {sentiment}: {speech_text}",
+        session_id, language
+    )
+    response.say(reply, voice="Polly.Matthew", rate="85%")
+    gather = Gather(input="speech", action=f"/conversation-response?session_id={session_id}", timeout=5)
+    gather.say("Your turn!", voice="Polly.Matthew", rate="85%")
     response.append(gather)
-
+    await log_interaction(session_id, "conversation", {"text": speech_text, "sentiment": sentiment, "intent": intent})
     return str(response)
 
+# Analytics endpoint
+@app.route("/analytics/<session_id>", methods=["GET"])
+async def get_analytics(session_id):
+    """Expose call analytics."""
+    interactions = redis_client.lrange(f"analytics:{session_id}", 0, -1)
+    return jsonify([json.loads(i) for i in interactions])
+
+# WebSocket handler for Deepgram
+async def deepgram_handler(websocket, path):
+    """Handle real-time Deepgram transcription."""
+    session_id = path.split("/")[-1]
+    async with dg_client.transcription.live({"punctuate": True, "interim_results": False}) as deepgram:
+        async for message in websocket:
+            if message["event"] == "media":
+                audio = message["media"]["payload"]
+                await deepgram.send(audio)
+                transcription = await deepgram.receive()
+                if transcription.get("is_final"):
+                    text = transcription["channel"]["alternatives"][0]["transcript"]
+                    redis_client.setex(f"session:{session_id}:last_transcript", 60, text)
+                    await websocket.send(json.dumps({"event": "transcription", "text": text}))
+
+async def main():
+    """Run Flask and WebSocket server concurrently."""
+    websocket_server = websockets.serve(deepgram_handler, "0.0.0.0", 8080)
+    await asyncio.gather(
+        websocket_server,
+        asyncio.to_thread(app.run, host="0.0.0.0", port=5000, debug=False)
+    )
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    asyncio.run(main())
