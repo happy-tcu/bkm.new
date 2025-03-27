@@ -15,7 +15,11 @@ from werkzeug.serving import run_simple
 
 app = Flask(__name__)
 
-# Redis setup (use Render Redis or an external service)
+# Debug: Print environment variables at startup
+print("DEEPSEEK_API_KEY:", os.getenv("DEEPSEEK_API_KEY"))
+print("DEEPGRAM_API_KEY:", os.getenv("DEEPGRAM_API_KEY"))
+
+# Redis setup
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
@@ -25,11 +29,11 @@ redis_client = redis.Redis(
 )
 
 # API Keys
-GROK_API_KEY = os.getenv("GROK_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 
-if not GROK_API_KEY or not DEEPGRAM_API_KEY:
-    raise ValueError("Missing API keys! Set GROK_API_KEY and DEEPGRAM_API_KEY.")
+if not DEEPSEEK_API_KEY or not DEEPGRAM_API_KEY:
+    raise ValueError("Missing API keys! Set DEEPSEEK_API_KEY and DEEPGRAM_API_KEY.")
 
 # Deepgram and Translator
 dg_client = Deepgram(DEEPGRAM_API_KEY)
@@ -43,15 +47,15 @@ logger = logging.getLogger(__name__)
 SENTIMENT_POSITIVE = 0.3
 SENTIMENT_NEGATIVE = -0.3
 
-async def call_grok_api(prompt, session_id=None, language="en"):
-    url = "https://api.x.ai/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"}
+async def call_deepseek_api(prompt, session_id=None, language="en"):
+    url = "https://api.deepseek.com/chat/completions"  # DeepSeek API endpoint
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"}
     context = redis_client.get(f"session:{session_id}:context") or []
     if isinstance(context, str):
         context = json.loads(context)
 
     messages = context + [{"role": "user", "content": prompt}]
-    payload = {"model": "grok-3", "messages": messages, "max_tokens": 200}
+    payload = {"model": "deepseek-chat", "messages": messages, "max_tokens": 200}  # Using DeepSeek V3 chat model
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, headers=headers) as resp:
@@ -63,12 +67,12 @@ async def call_grok_api(prompt, session_id=None, language="en"):
                 context.extend([{"role": "user", "content": prompt}, {"role": "assistant", "content": reply}])
                 redis_client.setex(f"session:{session_id}:context", 7200, json.dumps(context))
                 return reply
-            logger.error(f"Grok API error: {resp.status}")
+            logger.error(f"DeepSeek API error: {resp.status}")
             return "I’m having trouble processing that. Let’s try again."
 
 async def analyze_sentiment(text):
     sentiment_prompt = f"Analyze the sentiment of this text (positive, negative, neutral) and give a score (-1 to 1): {text}"
-    sentiment = await call_grok_api(sentiment_prompt)
+    sentiment = await call_deepseek_api(sentiment_prompt)
     score = float(sentiment.split("score:")[-1].strip()) if "score:" in sentiment else 0
     return score
 
@@ -123,7 +127,7 @@ async def store_id():
         return str(response)
 
     redis_client.setex(f"session:{session_id}:id", 7200, student_id)
-    intent = await call_grok_api(f"Guess the intent of this ID input: {student_id}", session_id, language)
+    intent = await call_deepseek_api(f"Guess the intent of this ID input: {student_id}", session_id, language)
     if "help" in intent.lower():
         response.redirect(f"/open-conversation?session_id={session_id}")
     else:
@@ -171,7 +175,7 @@ async def fact_session():
     session_id = request.args.get("session_id", get_session_id(request))
     language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
-    fact = await call_grok_api("Tell me an interesting fact about the English language.", session_id, language)
+    fact = await call_deepseek_api("Tell me an interesting fact about the English language.", session_id, language)
     response.say(fact, voice="Polly.Matthew", rate="85%")
     gather = Gather(input="speech", action=f"/fact-response?session_id={session_id}", timeout=5)
     gather.say("What do you think?", voice="Polly.Matthew", rate="85%")
@@ -190,7 +194,7 @@ async def fact_response():
 
     sentiment = await analyze_sentiment(speech_text)
     redis_client.setex(f"session:{session_id}:sentiment", 7200, str(sentiment))
-    feedback = await call_grok_api(f"Respond thoughtfully to: {speech_text}", session_id, language)
+    feedback = await call_deepseek_api(f"Respond thoughtfully to: {speech_text}", session_id, language)
     response.say(feedback, voice="Polly.Matthew", rate="85%")
     response.redirect(f"/fact-session?session_id={session_id}")
     await log_interaction(session_id, "fact_response", {"text": speech_text, "sentiment": sentiment})
@@ -215,7 +219,7 @@ async def analyze_speech():
         response.redirect(f"/speech-coaching?session_id={session_id}")
         return str(response)
 
-    feedback = await call_grok_api(
+    feedback = await call_deepseek_api(
         f"Analyze this speech: '{speech_text}'. Provide a score (1-10) and phonetic breakdown (IPA).",
         session_id, language
     )
@@ -245,8 +249,8 @@ async def conversation_response():
 
     sentiment = await analyze_sentiment(speech_text)
     redis_client.setex(f"session:{session_id}:sentiment", 7200, str(sentiment))
-    intent = await call_grok_api(f"Guess the intent of: {speech_text}", session_id, language)
-    reply = await call_grok_api(
+    intent = await call_deepseek_api(f"Guess the intent of: {speech_text}", session_id, language)
+    reply = await call_deepseek_api(
         f"Continue this conversation as a tutor, considering intent '{intent}' and sentiment {sentiment}: {speech_text}",
         session_id, language
     )
