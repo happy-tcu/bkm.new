@@ -11,11 +11,18 @@ import logging
 from datetime import datetime
 import langdetect
 from googletrans import Translator
+from werkzeug.serving import run_simple
 
 app = Flask(__name__)
 
-# Redis for session storage and analytics
-redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+# Redis setup (use Render Redis or an external service)
+redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    db=0,
+    decode_responses=True,
+    password=os.getenv("REDIS_PASSWORD", None)
+)
 
 # API Keys
 GROK_API_KEY = os.getenv("GROK_API_KEY")
@@ -37,7 +44,6 @@ SENTIMENT_POSITIVE = 0.3
 SENTIMENT_NEGATIVE = -0.3
 
 async def call_grok_api(prompt, session_id=None, language="en"):
-    """Call Grok API with context and language support."""
     url = "https://api.x.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"}
     context = redis_client.get(f"session:{session_id}:context") or []
@@ -61,7 +67,6 @@ async def call_grok_api(prompt, session_id=None, language="en"):
             return "I’m having trouble processing that. Let’s try again."
 
 async def analyze_sentiment(text):
-    """Analyze sentiment using Grok."""
     sentiment_prompt = f"Analyze the sentiment of this text (positive, negative, neutral) and give a score (-1 to 1): {text}"
     sentiment = await call_grok_api(sentiment_prompt)
     score = float(sentiment.split("score:")[-1].strip()) if "score:" in sentiment else 0
@@ -71,17 +76,15 @@ def get_session_id(request):
     return request.form.get("CallSid", "default_session")
 
 async def log_interaction(session_id, action, data):
-    """Log interaction for analytics."""
     timestamp = datetime.now().isoformat()
     redis_client.lpush(f"analytics:{session_id}", json.dumps({"timestamp": timestamp, "action": action, "data": data}))
 
 @app.route("/ivr", methods=["POST"])
 async def welcome_student():
-    """Welcome with real-time Deepgram streaming."""
     session_id = get_session_id(request)
     response = VoiceResponse()
     response.say("Welcome! Say your full name.", voice="Polly.Matthew", rate="85%")
-    stream = Stream(url=f"wss://{request.host}:8080/stream/{session_id}", name="deepgram_stream")
+    stream = Stream(url=f"wss://{request.host}/stream/{session_id}", name="deepgram_stream")
     response.append(stream)
     response.redirect(f"/store-name?session_id={session_id}")
     await log_interaction(session_id, "welcome", {"state": "start"})
@@ -89,7 +92,6 @@ async def welcome_student():
 
 @app.route("/store-name", methods=["POST"])
 async def store_name():
-    """Store name with language detection."""
     session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
     speech_result = request.form.get("SpeechResult")
@@ -109,7 +111,6 @@ async def store_name():
 
 @app.route("/store-id", methods=["POST"])
 async def store_id():
-    """Store ID and route dynamically."""
     session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
     student_id = request.form.get("SpeechResult")
@@ -133,7 +134,6 @@ async def store_id():
 
 @app.route("/menu", methods=["POST"])
 async def menu():
-    """Dynamic menu with sentiment adjustment."""
     session_id = request.args.get("session_id", get_session_id(request))
     student_name = redis_client.get(f"session:{session_id}:name") or "Student"
     language = redis_client.get(f"session:{session_id}:language") or "en"
@@ -154,7 +154,6 @@ async def menu():
 
 @app.route("/handle-key", methods=["POST"])
 async def handle_key():
-    """Handle menu with dynamic routing."""
     session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
     choice = request.form.get("Digits")
@@ -169,7 +168,6 @@ async def handle_key():
 
 @app.route("/fact-session", methods=["POST"])
 async def fact_session():
-    """Share facts with sentiment-aware tone."""
     session_id = request.args.get("session_id", get_session_id(request))
     language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
@@ -182,7 +180,6 @@ async def fact_session():
 
 @app.route("/fact-response", methods=["POST"])
 async def fact_response():
-    """Respond with sentiment analysis."""
     session_id = request.args.get("session_id", get_session_id(request))
     language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
@@ -201,7 +198,6 @@ async def fact_response():
 
 @app.route("/speech-coaching", methods=["POST"])
 async def speech_coaching():
-    """Advanced pronunciation training."""
     session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
     gather = Gather(input="speech", action=f"/analyze-speech?session_id={session_id}", timeout=5)
@@ -211,7 +207,6 @@ async def speech_coaching():
 
 @app.route("/analyze-speech", methods=["POST"])
 async def analyze_speech():
-    """Phonetic feedback and scoring."""
     session_id = request.args.get("session_id", get_session_id(request))
     language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
@@ -231,7 +226,6 @@ async def analyze_speech():
 
 @app.route("/open-conversation", methods=["POST"])
 async def open_conversation():
-    """Sentiment-aware conversation."""
     session_id = request.args.get("session_id", get_session_id(request))
     response = VoiceResponse()
     gather = Gather(input="speech", action=f"/conversation-response?session_id={session_id}", timeout=5)
@@ -241,7 +235,6 @@ async def open_conversation():
 
 @app.route("/conversation-response", methods=["POST"])
 async def conversation_response():
-    """Dynamic conversation with sentiment and intent."""
     session_id = request.args.get("session_id", get_session_id(request))
     language = redis_client.get(f"session:{session_id}:language") or "en"
     response = VoiceResponse()
@@ -264,21 +257,18 @@ async def conversation_response():
     await log_interaction(session_id, "conversation", {"text": speech_text, "sentiment": sentiment, "intent": intent})
     return str(response)
 
-# Analytics endpoint
 @app.route("/analytics/<session_id>", methods=["GET"])
 async def get_analytics(session_id):
-    """Expose call analytics."""
     interactions = redis_client.lrange(f"analytics:{session_id}", 0, -1)
     return jsonify([json.loads(i) for i in interactions])
 
-# WebSocket handler for Deepgram
 async def deepgram_handler(websocket, path):
-    """Handle real-time Deepgram transcription."""
     session_id = path.split("/")[-1]
     async with dg_client.transcription.live({"punctuate": True, "interim_results": False}) as deepgram:
         async for message in websocket:
-            if message["event"] == "media":
-                audio = message["media"]["payload"]
+            data = json.loads(message)
+            if data["event"] == "media":
+                audio = data["media"]["payload"]
                 await deepgram.send(audio)
                 transcription = await deepgram.receive()
                 if transcription.get("is_final"):
@@ -286,13 +276,13 @@ async def deepgram_handler(websocket, path):
                     redis_client.setex(f"session:{session_id}:last_transcript", 60, text)
                     await websocket.send(json.dumps({"event": "transcription", "text": text}))
 
-async def main():
-    """Run Flask and WebSocket server concurrently."""
-    websocket_server = websockets.serve(deepgram_handler, "0.0.0.0", 8080)
+async def run_servers():
+    port = int(os.getenv("PORT", 10000))  # Render assigns PORT
+    server = websockets.serve(deepgram_handler, "0.0.0.0", port)
     await asyncio.gather(
-        websocket_server,
-        asyncio.to_thread(app.run, host="0.0.0.0", port=5000, debug=False)
+        server,
+        asyncio.to_thread(run_simple, "0.0.0.0", port, app, use_reloader=False)
     )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_servers())
