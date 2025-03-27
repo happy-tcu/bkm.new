@@ -1,6 +1,13 @@
 from flask import Flask, request, jsonify
 from twilio.twiml.voice_response import VoiceResponse, Gather, Stream
 import os
+
+# Get the PORT from the environment variable or default to 5000
+port = int(os.environ.get("PORT", 5000))
+
+# Running the app on the dynamic port
+app.run(host="0.0.0.0", port=port, debug=False)
+
 import redis
 import json
 import asyncio
@@ -12,6 +19,7 @@ from datetime import datetime
 import langdetect
 from googletrans import Translator
 from werkzeug.serving import run_simple
+
 
 app = Flask(__name__)
 
